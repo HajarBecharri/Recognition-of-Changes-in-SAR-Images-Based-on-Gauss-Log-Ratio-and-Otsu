@@ -95,16 +95,46 @@ def RefinedLee(img):
     # Retourner l'image filtrée
     return img.addBands(result.rename("filter"))
 
+def load_image_from_url(url):
+    response = requests.get(url)
+    if response.status_code == 200:
+        return Image.open(BytesIO(response.content))
+    else:
+        print(f"Erreur lors du chargement de l'image depuis l'URL : {url}")
+        return None
+    
+    
+def get_image_url(image, region, band="VV"):
+    single_band_image = image.select(band)  # Select the specified band
+    url = single_band_image.getThumbURL({
+        'region': region,
+        'dimensions': 512,
+        'format': 'png',
+        'min': -30,
+        'max': 0,
+        'palette': ['black', 'white'],
+    })
+    return url
+
 def preprocess_image2(image):
     image_filterd = terrain_correction(image)
     image_filterd2 = RefinedLee(image_filterd)
 
     return image_filterd2
 
+
+def radar_to_opencv(image_pil):
+    if image_pil.mode != 'L':
+        image_pil = image_pil.convert('L')
+    image_np = np.array(image_pil)
+    image_cv = cv2.normalize(image_np, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    return image_cv
+
 def preprocess_image(image):
     """Applique un prétraitement d'image avec un flou et un débruitage"""
     image_blurred = cv2.GaussianBlur(image, (5, 5), 0)
     image_adaptive = cv2.fastNlMeansDenoising(image_blurred, None, 30, 7, 21)
+    print("Hello procees images ")
     return image_adaptive
 
 def compute_difference(image1, image2):
@@ -142,8 +172,37 @@ def draw_contours_on_image(original_image, binary_map, color=(0, 255, 0), thickn
     cv2.drawContours(image_with_contours, contours, -1, color, thickness)
     return image_with_contours
 
-def process_images(image1, image2):
+def process_images(image1, image2 , coords):
     """Processus complet des images : prétraitement, calcul de la différence, détection des changements"""
+
+    filtered_image_before = preprocess_image2(image1)  # Correction et filtrage pour avant
+    filtered_image_after = preprocess_image2(image2)  # Correction et filtrage pour après
+    # URL des images
+    before_url = get_image_url(image1, coords, band="VV")
+    after_url = get_image_url(image2, coords, band="VV")
+
+    before_image = load_image_from_url(before_url)
+    after_image = load_image_from_url(after_url)
+
+    image1_original = radar_to_opencv(before_image)
+    image2_original = radar_to_opencv(after_image)
+
+    # Obtenir les URL des images prétraitées
+    filtered_before_url = get_image_url(filtered_image_before, coords, band="VV")
+    filtered_after_url = get_image_url(filtered_image_after, coords, band="VV")
+
+    # Charger les images prétraitées
+    filtered_before_image = load_image_from_url(filtered_before_url)
+    filtered_after_image = load_image_from_url(filtered_after_url)
+
+    imagecv_before_change = radar_to_opencv(filtered_before_image)
+    imagecv_after_change = radar_to_opencv(filtered_after_image)
+
+    image1_filtered = imagecv_before_change
+    image2_filtered = imagecv_after_change
+
+    image1 = image1_filtered
+    image2 = image2_filtered
 
     # Redimensionner image 2 pour qu'elle corresponde à la taille d'image 1
     image2_resized = resize_image_to_match(image1, image2)
@@ -166,4 +225,4 @@ def process_images(image1, image2):
     image2_with_changes = draw_contours_on_image(image2_resized, binary_positive_map, color=(0, 255, 0), thickness=2)
     image2_with_changes = draw_contours_on_image(image2_with_changes, binary_negative_map, color=(255, 0, 0), thickness=2)
     
-    return image1, image2_resized, difference_image, binary_positive_map, binary_negative_map, image2_with_changes, threshold_value
+    return image1_original, image2_original,image1_filtered , image2_filtered , difference_image, binary_positive_map, binary_negative_map, image2_with_changes, threshold_value
